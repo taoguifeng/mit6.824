@@ -60,6 +60,9 @@ type Log struct{
 	termId int
 }
 
+func printTime(){
+	fmt.Printf("%v\n",time.Now())
+}
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -170,10 +173,11 @@ type HeartReply struct{
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//fmt.Printf("我是%d 我现在开始为%d投任期为%d的票\n",rf.me,args.CandidateId,args.Term)
+	fmt.Printf("我是%d 我现在开始为%d投任期为%d的票\n",rf.me,args.CandidateId,args.Term)
 	//fmt.Printf("你的任期为%d,我当前的任期为%d\n",args.Term,rf.currentTerm)
 	if args.Term > rf.currentTerm{
 		rf.mu.Lock()
+		fmt.Printf("我是%d,我现在慢了,是%d,因此我变成和%d一样的term 即%d\n",rf.me,rf.currentTerm,args.CandidateId,args.Term)
 		rf.currentTerm = args.Term
 		rf.status = Follower
 		rf.votedFor = -1
@@ -184,7 +188,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if args.Term < rf.currentTerm{
 			//fmt.Printf("对不起 你的任期比我小,我不投票给你\n")
 		}else{
-			//fmt.Printf("对不起 我已经把票投给了%d\n",rf.votedFor)
+			rf.mu.Lock()
+			rf.lastHeartReceive = time.Now()
+			rf.mu.Unlock()
+			fmt.Printf("对不起 我已经把票投给了%d但是我的时钟已经更新\n",rf.votedFor)
 		}
 		return
 	}
@@ -299,6 +306,7 @@ func (rf *Raft) elect() bool {
 	rf.votedFor = -1
 	rf.currentTerm++
 	rf.status = Candidate
+	rf.lastHeartReceive = time.Now()
 	rf.mu.Unlock()
 	tot,agree := 0,0
 
@@ -331,13 +339,14 @@ func (rf *Raft) elect() bool {
 				Term : 0,
 				VoteGranted : false,
 			}
+			fmt.Printf("%d的任期为%d的发给%d的票已发出\n",rf.me,rf.currentTerm,x)
 			ok := rf.sendRequestVote(x,&request,&reply)
 			if ok{
 				if reply.VoteGranted{
 					agree++
-					//fmt.Printf("%d赢得了%d的任期为%d的一票\n",rf.me,x,reply.Term)
+					fmt.Printf("%d赢得了%d的任期为%d的一票\n",rf.me,x,reply.Term)
 				}else{
-					//fmt.Printf("%d没有赢得%d的任期为%d的一票\n",rf.me,x,reply.Term)
+					fmt.Printf("%d没有赢得%d的任期为%d的一票\n",rf.me,x,reply.Term)
 				}
 			}else{
 				//fmt.Printf("%d的消息没有回应 我是%d...\n",x,rf.me)
@@ -349,6 +358,14 @@ func (rf *Raft) elect() bool {
 	//fmt.Printf("%d在等待所有人任期为%d的投票结束\n",rf.me,rf.currentTerm)
 	go func(){
 		for{
+			if tot==3 && agree<2{
+				rf.mu.Lock()
+				rf.status = Follower
+				rf.mu.Unlock()
+				cond.Broadcast()
+				fmt.Printf("%d在任期为%d的时间内被否决\n",rf.me,rf.currentTerm)
+				return
+			}
 			if agree>=2{
 				if rf.status != Candidate{
 					return
@@ -372,7 +389,7 @@ func (rf *Raft) elect() bool {
 				if rf.status != Candidate{
 					return
 				}
-				fmt.Printf("%d的任期为%d的投票超时\n",rf.me,rf.currentTerm)
+				fmt.Printf("%d的任期为%d的投票超时，只收到了%d票\n",rf.me,rf.currentTerm,tot)
 				rf.mu.Lock()
 				if rf.status == Candidate{
 					rf.status = Follower
@@ -426,7 +443,7 @@ func (rf *Raft) ticker() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
 
-		rf.timeOut = 150 + (rand.Int63() % 300)
+		rf.timeOut = 50 + (rand.Int63() % 300)
 		now := time.Now().UnixMilli()
 		//fmt.Printf("我是%d 我的状态为%v 任期为%d\n",rf.me,rf.status,rf.currentTerm)
 		//fmt.Printf("%v\n",now - rf.lastHeartReceive.UnixMilli());
