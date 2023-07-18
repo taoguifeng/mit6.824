@@ -60,6 +60,9 @@ type Log struct{
 	termId int
 }
 
+func printTime(){
+	fmt.Printf("%v\n",time.Now())
+}
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -67,7 +70,6 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -80,6 +82,9 @@ type Raft struct {
 
 }
 
+func (rf *Raft)upTimeout(){
+	rf.timeOut = 50 + (rand.Int63() % 300)
+}
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -171,7 +176,6 @@ type HeartReply struct{
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	//fmt.Printf("我是%d 我现在开始为%d投任期为%d的票\n",rf.me,args.CandidateId,args.Term)
-	//fmt.Printf("你的任期为%d,我当前的任期为%d\n",args.Term,rf.currentTerm)
 	if args.Term > rf.currentTerm{
 		rf.mu.Lock()
 		rf.currentTerm = args.Term
@@ -182,9 +186,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm || rf.votedFor != -1{
 		reply.VoteGranted = false
 		if args.Term < rf.currentTerm{
-			//fmt.Printf("对不起 你的任期比我小,我不投票给你\n")
 		}else{
-			//fmt.Printf("对不起 我已经把票投给了%d\n",rf.votedFor)
+			rf.mu.Lock()
+			rf.lastHeartReceive = time.Now()
+			rf.mu.Unlock()
 		}
 		return
 	}
@@ -209,7 +214,6 @@ func (rf *Raft) AppendEntries(args *HeartRequest,reply *HeartReply){
 		rf.status = Follower
 		rf.mu.Unlock()
 	}
-	//fmt.Printf("%d收到了%d的任期为%d的心跳  状态变成了Follower\n",rf.me,args.CandidateId,args.Term)
 	rf.lastHeartReceive = time.Now()
 }
 
@@ -294,11 +298,13 @@ func (rf *Raft) killed() bool {
 }
 
 
-func (rf *Raft) elect() bool {
+func (rf *Raft) elect() {
 	rf.mu.Lock()
 	rf.votedFor = -1
 	rf.currentTerm++
 	rf.status = Candidate
+	rf.lastHeartReceive = time.Now()
+	rf.upTimeout()
 	rf.mu.Unlock()
 	tot,agree := 0,0
 
@@ -308,15 +314,15 @@ func (rf *Raft) elect() bool {
 	for i:=0;i<3;i++{
 		if i==rf.me{   //是自己
 			if rf.votedFor!=-1{
-				//fmt.Printf("%d的任期为%d的票已投给了%d,不能给自己投票\n",rf.me,rf.currentTerm,rf.votedFor)
-				return false
+				fmt.Printf("%d的任期为%d的票已投给了%d,不能给自己投票\n",rf.me,rf.currentTerm,rf.votedFor)
+				continue
 			}
 			agree++
 			tot++
 			rf.mu.Lock()
 			rf.votedFor = rf.me
 			rf.mu.Unlock()
-			//fmt.Printf("%d把任期为%d的票投给了自己\n",rf.me,rf.currentTerm)
+			fmt.Printf("%d把任期为%d的票投给了自己\n",rf.me,rf.currentTerm)
 			continue
 		}
 		go func(x int){
@@ -331,24 +337,32 @@ func (rf *Raft) elect() bool {
 				Term : 0,
 				VoteGranted : false,
 			}
+			fmt.Printf("%d的任期为%d的发给%d的票已发出\n",rf.me,rf.currentTerm,x)
 			ok := rf.sendRequestVote(x,&request,&reply)
 			if ok{
 				if reply.VoteGranted{
 					agree++
-					//fmt.Printf("%d赢得了%d的任期为%d的一票\n",rf.me,x,reply.Term)
+					fmt.Printf("%d赢得了%d的任期为%d的一票\n",rf.me,x,reply.Term)
 				}else{
-					//fmt.Printf("%d没有赢得%d的任期为%d的一票\n",rf.me,x,reply.Term)
+					fmt.Printf("%d没有赢得%d的任期为%d的一票\n",rf.me,x,reply.Term)
 				}
 			}else{
-				//fmt.Printf("%d的消息没有回应 我是%d...\n",x,rf.me)
+				fmt.Printf("%d的消息没有回应 我是%d...\n",x,rf.me)
 			}
 			tot++
 		}(i)
 
 	}
-	//fmt.Printf("%d在等待所有人任期为%d的投票结束\n",rf.me,rf.currentTerm)
 	go func(){
 		for{
+			if tot==3 && agree<2{
+				rf.mu.Lock()
+				rf.status = Follower
+				rf.mu.Unlock()
+				cond.Broadcast()
+				fmt.Printf("%d在任期为%d的时间内被否决\n",rf.me,rf.currentTerm)
+				return
+			}
 			if agree>=2{
 				if rf.status != Candidate{
 					return
@@ -362,45 +376,34 @@ func (rf *Raft) elect() bool {
 				cond.Broadcast()
 				return
 			}
-			//time.Sleep(50*time.Millisecond)
 		}
 	}()
 	go func(){
 		for{
 			now := time.Now().UnixMilli()
 			if now - rf.lastHeartReceive.UnixMilli() > rf.timeOut{
-				if rf.status != Candidate{
-					return
-				}
-				fmt.Printf("%d的任期为%d的投票超时\n",rf.me,rf.currentTerm)
-				rf.mu.Lock()
-				if rf.status == Candidate{
-					rf.status = Follower
-				}
-				rf.mu.Unlock()
+				fmt.Printf("%d的任期为%d的投票超时，只收到了%d票\n",rf.me,rf.currentTerm,tot)
+				//这里还以Candidate身份退出 外面检测如果还是Candidate就再次选举
 				cond.Broadcast()
 				return
 			}
-			//time.Sleep(50*time.Millisecond)
 		}
 	}()
 	go func(){
 		for{
 			if rf.status !=Candidate {
-				//fmt.Printf("%d在任期为%d的投票中已经不是Candidate 投票终止\n",rf.me,rf.currentTerm)
+				fmt.Printf("%d在任期为%d的投票中已经不是Candidate 变成了%v  投票终止\n",rf.me,rf.currentTerm,rf.status)
 				cond.Broadcast()
 				return
 			}
-			//time.Sleep(50*time.Millisecond)
 		}
 	}()
 	mu.Lock()
 	cond.Wait()
-	return rf.status == Leader
 }
 
 func (rf *Raft)leaderDo(){
-	for{
+	//for{
 		if rf.status != Leader{
 			return
 		}
@@ -408,16 +411,14 @@ func (rf *Raft)leaderDo(){
 			if i==rf.me{
 				continue
 			}
-			go func(x int){
-				request := HeartRequest{
-					Term : rf.currentTerm,
-					CandidateId : rf.me,
-				}
-				reply := HeartReply{}
-				rf.sendAppendEntries(x,&request,&reply)
-			}(i)
+			request := HeartRequest{
+				Term : rf.currentTerm,
+				CandidateId : rf.me,
+			}
+			reply := HeartReply{}
+			rf.sendAppendEntries(i,&request,&reply)
 		}
-	}
+	//}
 
 }
 func (rf *Raft) ticker() {
@@ -426,27 +427,28 @@ func (rf *Raft) ticker() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
 
-		rf.timeOut = 150 + (rand.Int63() % 300)
 		now := time.Now().UnixMilli()
-		//fmt.Printf("我是%d 我的状态为%v 任期为%d\n",rf.me,rf.status,rf.currentTerm)
-		//fmt.Printf("%v\n",now - rf.lastHeartReceive.UnixMilli());
 		if rf.status == Follower && now - rf.lastHeartReceive.UnixMilli() > rf.timeOut{
-			//应该开始进行选举
 			fmt.Printf("我是%d 因为超时我要变成Candidate 我申请开始任期为%d的选举,因为我的超时时间是%v,但是已经经过了%v的时间\n",rf.me,rf.currentTerm+1,rf.timeOut,now-rf.lastHeartReceive.UnixMilli())
-			ok := rf.elect()
-			if ok{
-				go func(){
-					rf.leaderDo()
-				}()
-			}else{
-				fmt.Printf("%d没有成为任期为%d的领导\n",rf.me,rf.currentTerm)
+			rf.elect()
+			fmt.Printf("sure :: %d退出时候的状态是%d\n",rf.me,rf.status)
+		}
+		for{
+			if rf.status !=Candidate{
+				break
+			}
+			fmt.Printf("%d 还是Candidte 继续选举\n",rf.me)
+			rf.elect()
+		}
+		if rf.status == Leader{
+			fmt.Printf("%d成为任期为%d的了领导 开始发送心跳\n",rf.me,rf.currentTerm)
+			for rf.status == Leader{
+				rf.leaderDo()
 			}
 		}
-
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		time.Sleep(time.Duration(rf.timeOut) * time.Millisecond)
-		//fmt.Printf("%d休息完毕\n",rf.me)
+		//time.Sleep(time.Duration(rf.timeOut) * time.Millisecond)
 	}
 }
 
@@ -470,7 +472,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.status = Follower
-
+	rf.upTimeout()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
