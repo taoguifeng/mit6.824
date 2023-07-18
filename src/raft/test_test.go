@@ -59,7 +59,7 @@ func TestReElection2A(t *testing.T) {
 
 	leader1 := cfg.checkOneLeader()
 
-	fmt.Printf("------------------------------选出了一个领导是%v\n",leader1)
+	fmt.Printf("------------------------------选出了一个领导leader1是%v\n",leader1)
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
@@ -69,6 +69,7 @@ func TestReElection2A(t *testing.T) {
 	// should switch to follower.
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
+	fmt.Printf("------------------------------选出了一个领导leader2是%v\n",leader2)
 	fmt.Println("-------------------------------two pass--------------------------------")
 	// if there's no quorum, no new leader should
 	// be elected.
@@ -103,6 +104,7 @@ func TestManyElections2A(t *testing.T) {
 
 	cfg.checkOneLeader()
 
+	fmt.Println("-------------------------------one pass--------------------------------")
 	iters := 10
 	for ii := 1; ii < iters; ii++ {
 		// disconnect three nodes
@@ -125,6 +127,9 @@ func TestManyElections2A(t *testing.T) {
 	cfg.checkOneLeader()
 
 	cfg.end()
+
+
+	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA已经pass!!!!!!!!!!!!!!")
 }
 
 func TestBasicAgree2B(t *testing.T) {
